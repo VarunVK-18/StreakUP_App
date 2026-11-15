@@ -1,13 +1,18 @@
-import 'dart:convert';
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:intl/intl.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 
 import 'habitscreen.dart';
 import 'attanancescreen.dart';
 import 'statsscreen.dart';
 import 'theme_provider.dart';
+import 'auth_screen.dart';
+import '../services/database_service.dart';
+import '../services/auth_service.dart';
+import '../services/step_service.dart';
+import '../services/notification_service.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -20,6 +25,16 @@ class _HomeScreenState extends State<HomeScreen> {
   int totalHabits = 0;
   int completedHabits = 0;
   double attendancePercent = 0;
+  String _userName = '';
+
+  // Water & Health State
+  int _waterGlasses = 0;
+  int _waterTarget = 8;
+  final StepService _stepService = StepService();
+
+  // PageView controller for swipeable Focus Cards
+  final PageController _focusPageController = PageController(viewportFraction: 0.88);
+  int _focusPageIndex = 0;
 
   final List<String> _dailyQuotes = [
     "✨ Start by adding your first habit!",
@@ -45,16 +60,25 @@ class _HomeScreenState extends State<HomeScreen> {
   void initState() {
     super.initState();
     _loadData();
+    _initHealthServices();
+  }
+
+  Future<void> _initHealthServices() async {
+    await _stepService.init();
+    await NotificationService.scheduleWaterReminders();
+    _stepService.todaySteps.addListener(() {
+      if (mounted) setState(() {});
+    });
+    _stepService.targetSteps.addListener(() {
+      if (mounted) setState(() {});
+    });
   }
 
   Future<void> _loadData() async {
-    final prefs = await SharedPreferences.getInstance();
-
-    final habits =
-    json.decode(prefs.getString('habits') ?? '[]') as List;
-
-    final subjects =
-    json.decode(prefs.getString('subjects') ?? '[]') as List;
+    final dbService = DatabaseService();
+    final habits = await dbService.loadHabits();
+    final subjects = await dbService.loadSubjects();
+    final health = await dbService.loadDailyHealth();
 
     totalHabits = habits.length;
     completedHabits =
@@ -71,7 +95,169 @@ class _HomeScreenState extends State<HomeScreen> {
     attendancePercent =
     total == 0 ? 0 : (present / total) * 100;
 
+    _waterGlasses = health['waterGlasses'] ?? 0;
+    _waterTarget = health['waterTarget'] ?? 8;
+
+    // Load User Name
+    final currentUser = AuthService().currentUser;
+    if (currentUser != null) {
+      if (currentUser.displayName != null && currentUser.displayName!.trim().isNotEmpty) {
+        _userName = currentUser.displayName!.trim();
+      } else if (currentUser.email != null) {
+        _userName = currentUser.email!.split('@').first;
+      }
+    }
+
     if (mounted) setState(() {});
+  }
+
+  Future<void> _drinkWater() async {
+    setState(() {
+      _waterGlasses++;
+    });
+
+    final dbService = DatabaseService();
+    await dbService.saveDailyHealth(
+      waterGlasses: _waterGlasses,
+      waterTarget: _waterTarget,
+      stepsCount: _stepService.todaySteps.value,
+      stepsTarget: _stepService.targetSteps.value,
+    );
+
+    if (_waterGlasses == _waterTarget) {
+      NotificationService.showWaterGoalReached(_waterTarget);
+    }
+  }
+
+  Future<void> _undoWater() async {
+    if (_waterGlasses <= 0) return;
+    setState(() {
+      _waterGlasses--;
+    });
+
+    final dbService = DatabaseService();
+    await dbService.saveDailyHealth(
+      waterGlasses: _waterGlasses,
+      waterTarget: _waterTarget,
+      stepsCount: _stepService.todaySteps.value,
+      stepsTarget: _stepService.targetSteps.value,
+    );
+  }
+
+  void _showSetWaterTargetDialog() {
+    int tempTarget = _waterTarget;
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Set Daily Water Target'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text('How many glasses (approx 250ml) do you want to drink per day?'),
+            const SizedBox(height: 16),
+            StatefulBuilder(
+              builder: (ctx, setLocal) => Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  IconButton(
+                    icon: const Icon(Icons.remove_circle_outline),
+                    onPressed: tempTarget > 1
+                        ? () => setLocal(() => tempTarget--)
+                        : null,
+                  ),
+                  Text(
+                    '$tempTarget glasses',
+                    style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.add_circle_outline),
+                    onPressed: tempTarget < 25
+                        ? () => setLocal(() => tempTarget++)
+                        : null,
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.black,
+              foregroundColor: Colors.white,
+            ),
+            onPressed: () async {
+              setState(() => _waterTarget = tempTarget);
+              Navigator.pop(ctx);
+              await DatabaseService().saveDailyHealth(
+                waterGlasses: _waterGlasses,
+                waterTarget: _waterTarget,
+                stepsCount: _stepService.todaySteps.value,
+                stepsTarget: _stepService.targetSteps.value,
+              );
+            },
+            child: const Text('Save Target'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showSetStepsTargetDialog() {
+    int tempTarget = _stepService.targetSteps.value;
+    final controller = TextEditingController(text: tempTarget.toString());
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Set Daily Steps Target'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text('Enter your target steps for today:'),
+            const SizedBox(height: 12),
+            TextField(
+              controller: controller,
+              keyboardType: TextInputType.number,
+              decoration: InputDecoration(
+                hintText: 'e.g. 6000',
+                suffixText: 'steps',
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.black,
+              foregroundColor: Colors.white,
+            ),
+            onPressed: () {
+              final parsed = int.tryParse(controller.text.trim());
+              if (parsed != null && parsed > 0) {
+                _stepService.setTarget(parsed);
+              }
+              Navigator.pop(ctx);
+            },
+            child: const Text('Save Target'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  void dispose() {
+    _focusPageController.dispose();
+    super.dispose();
   }
 
   @override
@@ -94,6 +280,43 @@ class _HomeScreenState extends State<HomeScreen> {
             icon: Icon(isDark ? Icons.light_mode : Icons.dark_mode),
             onPressed: themeProvider.toggleTheme,
           ),
+          IconButton(
+            icon: const Icon(Icons.logout_rounded),
+            tooltip: 'Sign Out',
+            onPressed: () async {
+              final confirm = await showDialog<bool>(
+                context: context,
+                builder: (ctx) => AlertDialog(
+                  title: const Text('Sign Out'),
+                  content: const Text('Are you sure you want to sign out?'),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(ctx, false),
+                      child: const Text('Cancel'),
+                    ),
+                    ElevatedButton(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.black,
+                        foregroundColor: Colors.white,
+                      ),
+                      onPressed: () => Navigator.pop(ctx, true),
+                      child: const Text('Sign Out'),
+                    ),
+                  ],
+                ),
+              );
+
+              if (confirm == true) {
+                await AuthService().signOut();
+                if (context.mounted) {
+                  Navigator.of(context).pushAndRemoveUntil(
+                    MaterialPageRoute(builder: (_) => const AuthScreen()),
+                    (route) => false,
+                  );
+                }
+              }
+            },
+          ),
         ],
       ),
       floatingActionButton: FloatingActionButton(
@@ -112,52 +335,124 @@ class _HomeScreenState extends State<HomeScreen> {
                 fontWeight: FontWeight.bold,
               ),
             ),
-            const SizedBox(height: 6),
-            const Text(
-              "Welcome Back 👋",
-              style: TextStyle(
-                fontSize: 24,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-            const SizedBox(height: 20),
-            const Text(
-              "Today's Focus",
-              style: TextStyle(
-                fontSize: 20,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-            const SizedBox(height: 12),
-
-            /// ✅ Removed rigid height container (main fix)
-            SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: Row(
-                children: [
-                  _focusCard(
-                    title: "Habits Left",
-                    value: totalHabits - completedHabits,
-                    icon: Icons.local_fire_department,
-                    color: Colors.orange,
-                    percent: totalHabits == 0
-                        ? 0
-                        : completedHabits / totalHabits,
+            const SizedBox(height: 4),
+            Row(
+              children: [
+                Flexible(
+                  child: Text(
+                    _userName.isNotEmpty ? "Welcome Back, $_userName" : "Welcome Back",
+                    style: const TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: -0.3,
+                    ),
                   ),
-                  const SizedBox(width: 12),
-                  _focusCard(
-                    title: "Attendance",
-                    value:
-                    "${attendancePercent.toStringAsFixed(1)}%",
-                    icon: Icons.school,
-                    color: attendancePercent >= 75
-                        ? Colors.green
-                        : Colors.red,
-                    percent: attendancePercent / 100,
+                ),
+                const SizedBox(width: 8),
+                SvgPicture.asset(
+                  'assets/icons/welcome_icon.svg',
+                  width: 22,
+                  height: 22,
+                  colorFilter: ColorFilter.mode(
+                    isDark ? Colors.white : Colors.black87,
+                    BlendMode.srcIn,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 18),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text(
+                  "Today's Focus",
+                  style: TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                Text(
+                  _focusPageIndex == 0 ? "Habits" : "Attendance",
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.grey[600],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 14),
+
+            // 💳 SWIPEABLE CREDIT-CARD STYLE CARDS
+            SizedBox(
+              height: 195,
+              child: PageView(
+                controller: _focusPageController,
+                onPageChanged: (i) => setState(() => _focusPageIndex = i),
+                children: [
+                  _swipeCard(
+                    title: "Streak Momentum",
+                    subtitle: "Daily Habits",
+                    mainValue: "${totalHabits - completedHabits} Left",
+                    progressPercent: totalHabits == 0 ? 0.0 : (completedHabits / totalHabits),
+                    progressLabel: "$completedHabits of $totalHabits completed",
+                    gradientColors: [const Color(0xFF6366F1), const Color(0xFF4338CA)], // Ambient Indigo Glow
+                    iconSvg: 'assets/icons/fire_icon.svg',
+                    badgeText: totalHabits == completedHabits && totalHabits > 0 ? "DONE 🔥" : "ACTIVE",
+                  ),
+                  _swipeCard(
+                    title: "Class Attendance",
+                    subtitle: "Academic Streak",
+                    mainValue: "${attendancePercent.toStringAsFixed(1)}%",
+                    progressPercent: (attendancePercent / 100).clamp(0.0, 1.0),
+                    progressLabel: attendancePercent >= 75 ? "Safe threshold (≥75%)" : "Below 75% goal",
+                    gradientColors: [const Color(0xFF0EA5E9), const Color(0xFF0284C7)], // Ambient Sky Blue Glow
+                    iconData: Icons.school_rounded,
+                    badgeText: attendancePercent >= 75 ? "HEALTHY" : "CRITICAL",
                   ),
                 ],
               ),
             ),
+            const SizedBox(height: 10),
+
+            // Pagination Dots (Matching reference mockup "Physical Card •••")
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                _buildDot(0),
+                const SizedBox(width: 6),
+                _buildDot(1),
+              ],
+            ),
+
+            const SizedBox(height: 24),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text(
+                  "Health & Hydration",
+                  style: TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                TextButton.icon(
+                  onPressed: () => _showHealthSettings(context),
+                  icon: const Icon(Icons.tune, size: 18),
+                  label: const Text("Targets"),
+                  style: TextButton.styleFrom(foregroundColor: Colors.grey),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+
+            // 💧 WATER TRACKER CARD
+            _waterTrackerCard(isDark),
+
+            const SizedBox(height: 12),
+
+            // 🚶‍♂️ STEPS COUNTER CARD
+            _stepsTrackerCard(isDark),
 
             const SizedBox(height: 28),
             const Text(
@@ -179,47 +474,194 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _focusCard({
+  // ---------------------------------------------------------------------------
+  // 🍎 MAC GLASSMORPHIC SWIPEABLE CARDS
+  // ---------------------------------------------------------------------------
+  Widget _swipeCard({
     required String title,
-    required dynamic value,
-    required IconData icon,
-    required Color color,
-    required double percent,
+    required String subtitle,
+    required String mainValue,
+    required double progressPercent,
+    required String progressLabel,
+    required List<Color> gradientColors,
+    IconData? iconData,
+    String? iconSvg,
+    required String badgeText,
   }) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
     return Container(
-      width: 150,
-      padding: const EdgeInsets.all(16),
+      margin: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
       decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.12), // ✅ modern API (no deprecation)
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: BorderRadius.circular(28),
       ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min, // ✅ prevents overflow
-        children: [
-          Icon(icon, color: color, size: 32),
-          const SizedBox(height: 12),
-          SizedBox(
-            height: 50,
-            width: 50,
-            child: CircularProgressIndicator(
-              value: percent.clamp(0.0, 1.0),
-              color: color,
-              backgroundColor: color.withValues(alpha: 0.2),
-              strokeWidth: 6,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(28),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 25, sigmaY: 25),
+          child: Container(
+            padding: const EdgeInsets.all(22),
+            decoration: BoxDecoration(
+              // Translucent frosted glass tint + ambient gradient
+              gradient: LinearGradient(
+                colors: isDark
+                    ? [
+                        gradientColors.first.withValues(alpha: 0.35),
+                        const Color(0xFF1E1E24).withValues(alpha: 0.70),
+                      ]
+                    : [
+                        gradientColors.first.withValues(alpha: 0.12),
+                        Colors.white.withValues(alpha: 0.65),
+                      ],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
+              borderRadius: BorderRadius.circular(28),
+              // Frosted glass border (light rim reflect)
+              border: Border.all(
+                color: isDark
+                    ? Colors.white.withValues(alpha: 0.18)
+                    : Colors.white.withValues(alpha: 0.85),
+                width: 1.5,
+              ),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                // Header Row
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          title,
+                          style: TextStyle(
+                            color: isDark ? Colors.white : const Color(0xFF0F172A),
+                            fontSize: 15,
+                            fontWeight: FontWeight.w600,
+                            letterSpacing: -0.2,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          subtitle,
+                          style: TextStyle(
+                            color: isDark ? Colors.white60 : const Color(0xFF64748B),
+                            fontSize: 11,
+                            fontWeight: FontWeight.normal,
+                          ),
+                        ),
+                      ],
+                    ),
+                    // Glass Pill Badge
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                      decoration: BoxDecoration(
+                        color: isDark
+                            ? Colors.white.withValues(alpha: 0.12)
+                            : Colors.black.withValues(alpha: 0.06),
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(
+                          color: isDark
+                              ? Colors.white.withValues(alpha: 0.15)
+                              : Colors.black.withValues(alpha: 0.08),
+                          width: 1,
+                        ),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (iconSvg != null)
+                            SvgPicture.asset(
+                              iconSvg,
+                              width: 13,
+                              height: 13,
+                              colorFilter: ColorFilter.mode(
+                                isDark ? Colors.orangeAccent : const Color(0xFFEA580C),
+                                BlendMode.srcIn,
+                              ),
+                            )
+                          else if (iconData != null)
+                            Icon(
+                              iconData,
+                              color: isDark ? Colors.blueAccent : const Color(0xFF2563EB),
+                              size: 14,
+                            ),
+                          const SizedBox(width: 5),
+                          Text(
+                            badgeText,
+                            style: TextStyle(
+                              color: isDark ? Colors.white : const Color(0xFF0F172A),
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                              letterSpacing: 0.6,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+
+                // Main Center Value
+                Text(
+                  mainValue,
+                  style: TextStyle(
+                    color: isDark ? Colors.white : const Color(0xFF0F172A),
+                    fontSize: 24,
+                    fontWeight: FontWeight.w600,
+                    letterSpacing: -0.4,
+                  ),
+                ),
+
+                // Bottom Progress Bar & Details
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(6),
+                      child: LinearProgressIndicator(
+                        value: progressPercent.clamp(0.0, 1.0),
+                        minHeight: 5,
+                        backgroundColor: isDark
+                            ? Colors.white.withValues(alpha: 0.12)
+                            : Colors.black.withValues(alpha: 0.06),
+                        valueColor: AlwaysStoppedAnimation<Color>(
+                          isDark ? Colors.white : const Color(0xFF0F172A),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 5),
+                    Text(
+                      progressLabel,
+                      style: TextStyle(
+                        color: isDark ? Colors.white60 : const Color(0xFF64748B),
+                        fontSize: 10.5,
+                        fontWeight: FontWeight.normal,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
             ),
           ),
-          const SizedBox(height: 8),
-          Text(
-            "$value",
-            style: TextStyle(
-              fontWeight: FontWeight.bold,
-              color: color,
-              fontSize: 16,
-            ),
-          ),
-          const SizedBox(height: 4),
-          Text(title, textAlign: TextAlign.center),
-        ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDot(int index) {
+    final bool active = _focusPageIndex == index;
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 200),
+      width: active ? 18 : 6,
+      height: 6,
+      decoration: BoxDecoration(
+        color: active ? Colors.black87 : Colors.grey[400],
+        borderRadius: BorderRadius.circular(3),
       ),
     );
   }
@@ -274,6 +716,254 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // 💧 WATER TRACKER CARD
+  // ---------------------------------------------------------------------------
+  Widget _waterTrackerCard(bool isDark) {
+    final double waterPercent = _waterTarget > 0 ? (_waterGlasses / _waterTarget).clamp(0.0, 1.0) : 0.0;
+    final bool goalDone = _waterGlasses >= _waterTarget;
+
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF1E1E1E) : Colors.white,
+        borderRadius: BorderRadius.circular(22),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: isDark ? 0.2 : 0.04),
+            blurRadius: 14,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Column(
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Colors.blue.withValues(alpha: 0.2),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(Icons.water_drop_rounded, color: Colors.blue, size: 24),
+                  ),
+                  const SizedBox(width: 12),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        "Water Intake",
+                        style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                      ),
+                      Text(
+                        goalDone ? "Goal Reached! 🎉" : "$_waterGlasses of $_waterTarget glasses",
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: goalDone ? Colors.blue : Colors.grey[600],
+                          fontWeight: goalDone ? FontWeight.w600 : FontWeight.normal,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+              Row(
+                children: [
+                  if (_waterGlasses > 0)
+                    IconButton(
+                      icon: const Icon(Icons.remove_circle_outline, color: Colors.grey),
+                      tooltip: 'Undo glass',
+                      onPressed: _undoWater,
+                    ),
+                  ElevatedButton.icon(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.blue,
+                      foregroundColor: Colors.white,
+                      elevation: 0,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                    ),
+                    onPressed: _drinkWater,
+                    icon: const Icon(Icons.add, size: 18),
+                    label: const Text("+1 Glass", style: TextStyle(fontWeight: FontWeight.bold)),
+                  ),
+                ],
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(8),
+            child: LinearProgressIndicator(
+              value: waterPercent,
+              minHeight: 10,
+              backgroundColor: Colors.blue.withValues(alpha: 0.15),
+              valueColor: const AlwaysStoppedAnimation<Color>(Colors.blueAccent),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // 🚶‍♂️ STEPS COUNTER CARD
+  // ---------------------------------------------------------------------------
+  Widget _stepsTrackerCard(bool isDark) {
+    return ValueListenableBuilder<int>(
+      valueListenable: _stepService.todaySteps,
+      builder: (context, steps, _) {
+        final target = _stepService.targetSteps.value;
+        final double stepsPercent = target > 0 ? (steps / target).clamp(0.0, 1.0) : 0.0;
+        final bool goalDone = steps >= target;
+
+        // Estimated km and calories
+        final double km = (steps * 0.00076);
+        final int kcal = (steps * 0.04).round();
+
+        return Container(
+          padding: const EdgeInsets.all(18),
+          decoration: BoxDecoration(
+            color: isDark ? const Color(0xFF1E1E1E) : Colors.white,
+            borderRadius: BorderRadius.circular(22),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: isDark ? 0.2 : 0.04),
+                blurRadius: 14,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: Column(
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: Colors.amber.withValues(alpha: 0.2),
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(Icons.directions_walk_rounded, color: Colors.amber, size: 24),
+                      ),
+                      const SizedBox(width: 12),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            "Step Counter",
+                            style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                          ),
+                          Text(
+                            goalDone ? "Target Achieved! 🏆" : "$steps / $target steps",
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: goalDone ? Colors.amber[800] : Colors.grey[600],
+                              fontWeight: goalDone ? FontWeight.w600 : FontWeight.normal,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.add_circle_outline, color: Colors.amber),
+                    tooltip: 'Add manual steps (+500)',
+                    onPressed: () => _stepService.addManualSteps(500),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 14),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(8),
+                child: LinearProgressIndicator(
+                  value: stepsPercent,
+                  minHeight: 10,
+                  backgroundColor: Colors.amber.withValues(alpha: 0.15),
+                  valueColor: const AlwaysStoppedAnimation<Color>(Colors.amber),
+                ),
+              ),
+              const SizedBox(height: 10),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(
+                    "📍 ${km.toStringAsFixed(2)} km",
+                    style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                  ),
+                  Row(
+                    children: [
+                      SvgPicture.asset(
+                        'assets/icons/fire_icon.svg',
+                        width: 14,
+                        height: 14,
+                        colorFilter: const ColorFilter.mode(Colors.orange, BlendMode.srcIn),
+                      ),
+                      const SizedBox(width: 4),
+                      Text(
+                        "$kcal kcal burned",
+                        style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  void _showHealthSettings(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (_) => Padding(
+        padding: const EdgeInsets.all(20),
+        child: Wrap(
+          runSpacing: 12,
+          children: [
+            const Text(
+              "Set Daily Health Targets",
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+            ),
+            const Divider(),
+            ListTile(
+              leading: const Icon(Icons.water_drop, color: Colors.blue),
+              title: const Text("Daily Water Target"),
+              subtitle: Text("Current: $_waterTarget glasses"),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () {
+                Navigator.pop(context);
+                _showSetWaterTargetDialog();
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.directions_walk, color: Colors.amber),
+              title: const Text("Daily Step Target"),
+              subtitle: Text("Current: ${_stepService.targetSteps.value} steps"),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () {
+                Navigator.pop(context);
+                _showSetStepsTargetDialog();
+              },
+            ),
+          ],
+        ),
       ),
     );
   }

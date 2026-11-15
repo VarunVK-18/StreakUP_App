@@ -1,6 +1,6 @@
-import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter_svg/flutter_svg.dart';
+import 'package:streakup/services/database_service.dart';
 
 class StatsScreen extends StatefulWidget {
   const StatsScreen({super.key});
@@ -10,6 +10,7 @@ class StatsScreen extends StatefulWidget {
 }
 
 class _StatsScreenState extends State<StatsScreen> {
+  final DatabaseService _dbService = DatabaseService();
   List<Map<String, dynamic>> habits = [];
   List<Map<String, dynamic>> subjects = [];
 
@@ -20,22 +21,12 @@ class _StatsScreenState extends State<StatsScreen> {
   }
 
   // ---------------------------------------------------------------------------
-  // ✅ SAFE DATA LOADING
+  // ✅ SAFE DATA LOADING (Cloud Firestore + Local Cache fallback)
   // ---------------------------------------------------------------------------
   Future<void> _loadData() async {
-    final prefs = await SharedPreferences.getInstance();
-
     try {
-      final habitData = prefs.getString('habits');
-      final subjectData = prefs.getString('subjects');
-
-      habits = habitData == null
-          ? []
-          : List<Map<String, dynamic>>.from(json.decode(habitData));
-
-      subjects = subjectData == null
-          ? []
-          : List<Map<String, dynamic>>.from(json.decode(subjectData));
+      habits = await _dbService.loadHabits();
+      subjects = await _dbService.loadSubjects();
     } catch (e) {
       habits = [];
       subjects = [];
@@ -95,15 +86,15 @@ class _StatsScreenState extends State<StatsScreen> {
                 _summaryCard(
                   "Habits",
                   habits.length.toString(),
-                  Icons.local_fire_department,
                   Colors.orange,
+                  svgAsset: 'assets/icons/fire_icon.svg',
                 ),
                 const SizedBox(width: 12),
                 _summaryCard(
                   "Attendance",
                   "${attendancePercent.toStringAsFixed(1)}%",
-                  Icons.school,
                   attendancePercent >= 75 ? Colors.green : Colors.red,
+                  icon: Icons.school,
                 ),
               ],
             ),
@@ -224,11 +215,23 @@ class _StatsScreenState extends State<StatsScreen> {
                       color: Colors.orange,
                     ),
                     title: Text(h['name'] ?? ''),
-                    trailing: Text(
-                      "🔥 ${(h['streak'] ?? 0)}",
-                      style: const TextStyle(
-                        fontWeight: FontWeight.bold,
-                      ),
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        SvgPicture.asset(
+                          'assets/icons/fire_icon.svg',
+                          width: 16,
+                          height: 16,
+                          colorFilter: const ColorFilter.mode(Colors.orange, BlendMode.srcIn),
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          "${(h['streak'] ?? 0)}",
+                          style: const TextStyle(
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 );
@@ -243,18 +246,32 @@ class _StatsScreenState extends State<StatsScreen> {
   // ---------------------------------------------------------------------------
   // ✅ SUMMARY CARD WIDGET (Fixed: withValues instead of withOpacity)
   // ---------------------------------------------------------------------------
-  Widget _summaryCard(String title, String value, IconData icon, Color color) {
+  Widget _summaryCard(
+    String title,
+    String value,
+    Color color, {
+    IconData? icon,
+    String? svgAsset,
+  }) {
     return Expanded(
       child: Container(
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
-          color: color.withValues(alpha: 0.12), // <-- fixed here
+          color: color.withValues(alpha: 0.12),
           borderRadius: BorderRadius.circular(16),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Icon(icon, color: color),
+            if (svgAsset != null)
+              SvgPicture.asset(
+                svgAsset,
+                width: 24,
+                height: 24,
+                colorFilter: ColorFilter.mode(color, BlendMode.srcIn),
+              )
+            else if (icon != null)
+              Icon(icon, color: color),
             const SizedBox(height: 8),
             Text(
               value,

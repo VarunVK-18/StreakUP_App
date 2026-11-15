@@ -3,6 +3,13 @@
     <!-- 🔔 Required for Android 13+ -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
 
+    <!-- 🚶‍♂️ Step Counter Activity Recognition -->
+    <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION"/>
+
+    <!-- ⏰ Exact alarms for reliable water reminders -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM"/>
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM"/>
+
     <!-- ✅ Required for scheduled notifications after reboot -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
 

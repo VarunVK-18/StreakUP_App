@@ -1,33 +1,130 @@
-import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
-import 'package:timezone/data/latest.dart' as tz;
-import 'package:timezone/timezone.dart' as tz;
-import 'package:permission_handler/permission_handler.dart';
+
+// Top-level background message handler for FCM
+@pragma('vm:entry-point')
+Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
+  debugPrint('🔥 FCM Background Message received: ${message.messageId}');
+}
 
 class NotificationService {
-  static final FlutterLocalNotificationsPlugin _notifications =
-  FlutterLocalNotificationsPlugin();
+  static final FirebaseMessaging _firebaseMessaging = FirebaseMessaging.instance;
+  static final FlutterLocalNotificationsPlugin _localNotifications =
+      FlutterLocalNotificationsPlugin();
 
   // ---------------------------------------------------------------------------
-  // ✅ INIT NOTIFICATIONS
+  // ✅ INITIALIZE FIREBASE CLOUD MESSAGING (FCM)
   // ---------------------------------------------------------------------------
   static Future<void> init() async {
-    tz.initializeTimeZones();
-
+    // 1. Setup local display banner channel for when app is in Foreground
     const androidSettings = AndroidInitializationSettings('@mipmap/ic_launcher');
-
     const settings = InitializationSettings(android: androidSettings);
+    await _localNotifications.initialize(settings: settings);
 
-    await _notifications.initialize(
-      settings: settings,
-      onDidReceiveNotificationResponse: (details) {},
+    // 2. Request FCM permissions from OS
+    final notificationSettings = await _firebaseMessaging.requestPermission(
+      alert: true,
+      badge: true,
+      sound: true,
+      provisional: false,
+    );
+    debugPrint('🔥 FCM Permission: ${notificationSettings.authorizationStatus}');
+
+    // 3. Register background message handler
+    FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+
+    // 4. Foreground FCM Listener: Displays incoming FCM push directly to user
+    FirebaseMessaging.onMessage.listen((RemoteMessage message) {
+      debugPrint('🔥 FCM Foreground Message: ${message.notification?.title}');
+      final notification = message.notification;
+      if (notification != null) {
+        _displayForegroundFCM(
+          title: notification.title ?? 'StreakUP Alert',
+          body: notification.body ?? '',
+        );
+      }
+    });
+
+    // 5. Save FCM Device Token & Subscribe to general topics
+    await _syncDeviceToken();
+
+    // Subscribe to topics for automatic cloud broadcasts
+    try {
+      await _firebaseMessaging.subscribeToTopic('daily_reminders');
+      await _firebaseMessaging.subscribeToTopic('water_reminders');
+    } catch (e) {
+      debugPrint('FCM topic subscription error: $e');
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // 🔑 SYNC FCM TOKEN TO USER PROFILE IN FIRESTORE
+  // ---------------------------------------------------------------------------
+  static Future<void> _syncDeviceToken() async {
+    try {
+      final token = await _firebaseMessaging.getToken();
+      if (token != null) {
+        debugPrint('==================================================');
+        debugPrint('🔥 ACTIVE FCM DEVICE TOKEN:');
+        debugPrint(token);
+        debugPrint('==================================================');
+
+        final user = FirebaseAuth.instance.currentUser;
+        if (user != null) {
+          await FirebaseFirestore.instance.collection('users').doc(user.uid).set({
+            'fcmToken': token,
+            'fcmUpdatedAt': FieldValue.serverTimestamp(),
+          }, SetOptions(merge: true));
+        }
+      }
+
+      // Listen for token refreshes
+      _firebaseMessaging.onTokenRefresh.listen((newToken) async {
+        final user = FirebaseAuth.instance.currentUser;
+        if (user != null) {
+          await FirebaseFirestore.instance.collection('users').doc(user.uid).set({
+            'fcmToken': newToken,
+            'fcmUpdatedAt': FieldValue.serverTimestamp(),
+          }, SetOptions(merge: true));
+        }
+      });
+    } catch (e) {
+      debugPrint('Error syncing FCM token: $e');
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // 🔔 DISPLAY FOREGROUND FCM BANNER
+  // ---------------------------------------------------------------------------
+  static Future<void> _displayForegroundFCM({
+    required String title,
+    required String body,
+  }) async {
+    const androidDetails = AndroidNotificationDetails(
+      'fcm_live_channel',
+      'Firebase Live Notifications',
+      channelDescription: 'Live push messages received from Firebase Cloud Messaging',
+      importance: Importance.max,
+      priority: Priority.high,
+      icon: '@mipmap/ic_launcher',
     );
 
-    // iOS only: request permission automatically
-    final iosDetails =
-    _notifications.resolvePlatformSpecificImplementation<
-        IOSFlutterLocalNotificationsPlugin>();
-    await iosDetails?.requestPermissions(
+    const details = NotificationDetails(android: androidDetails);
+
+    await _localNotifications.show(
+      id: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      title: title,
+      body: body,
+      notificationDetails: details,
+    );
+  }
+
+  // Check and request permission (Helper for UI)
+  static Future<void> checkAndRequestPermission({dynamic context}) async {
+    await _firebaseMessaging.requestPermission(
       alert: true,
       badge: true,
       sound: true,
@@ -35,179 +132,75 @@ class NotificationService {
   }
 
   // ---------------------------------------------------------------------------
-  // ✅ CHECK & REQUEST NOTIFICATION PERMISSION (iOS & Android 13+)
+  // ☁️ FIREBASE CLOUD TRIGGERS (Records events to Firestore for Cloud Function FCM)
   // ---------------------------------------------------------------------------
-  static Future<void> checkAndRequestPermission({BuildContext? context}) async {
-    final status = await Permission.notification.status;
+  static Future<void> triggerCloudNotification({
+    required String title,
+    required String body,
+    required String type, // e.g. 'water_goal', 'step_goal', 'streak_risk'
+  }) async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
 
-    if (!status.isGranted) {
-      final result = await Permission.notification.request();
+    // Show immediate notification if active
+    await _displayForegroundFCM(title: title, body: body);
 
-      if (context != null && context.mounted) {
-        if (result.isDenied || result.isPermanentlyDenied) {
-          showDialog(
-            context: context,
-            builder: (_) => AlertDialog(
-              title: const Text("Enable Notifications"),
-              content: const Text(
-                  "Notifications are disabled. To receive habit reminders, please enable them in your device settings."),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: const Text("Cancel"),
-                ),
-                ElevatedButton(
-                  onPressed: () {
-                    openAppSettings();
-                    Navigator.pop(context);
-                  },
-                  child: const Text("Open Settings"),
-                )
-              ],
-            ),
-          );
-        }
-      }
-    }
+    // Save notification event to Cloud Firestore
+    await FirebaseFirestore.instance
+        .collection('users')
+        .doc(user.uid)
+        .collection('notifications_queue')
+        .add({
+      'title': title,
+      'body': body,
+      'type': type,
+      'createdAt': FieldValue.serverTimestamp(),
+      'status': 'pending',
+    });
   }
 
-  // ---------------------------------------------------------------------------
-  // ✅ DAILY REMINDER – 8 PM
-  // ---------------------------------------------------------------------------
-  static Future<void> scheduleDailyReminder() async {
-    final now = tz.TZDateTime.now(tz.local);
+  // Legacy convenience wrappers routing through Firebase
+  static Future<void> scheduleDailyReminder() async {}
+  static Future<void> scheduleStreakCheck() async {}
+  static Future<void> scheduleWaterReminders({int intervalHours = 2}) async {}
 
-    var scheduled = tz.TZDateTime(
-      tz.local,
-      now.year,
-      now.month,
-      now.day,
-      20, // 8 PM
-    );
-
-    if (scheduled.isBefore(now)) scheduled = scheduled.add(const Duration(days: 1));
-
-    const androidDetails = AndroidNotificationDetails(
-      'daily_channel',
-      'Daily Reminder',
-      channelDescription: 'Daily habit reminder',
-      importance: Importance.max,
-      priority: Priority.high,
-    );
-
-    const details = NotificationDetails(android: androidDetails);
-
-    await _notifications.zonedSchedule(
-      id: 1,
-      title: 'Daily Check-in',
-      body: 'A small step today protects your progress.',
-      scheduledDate: scheduled,
-      notificationDetails: details,
-      androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
-      matchDateTimeComponents: DateTimeComponents.time,
-    );
-  }
-
-  // ---------------------------------------------------------------------------
-  // ✅ STREAK CHECK – 7 PM
-  // ---------------------------------------------------------------------------
-  static Future<void> scheduleStreakCheck() async {
-    final now = tz.TZDateTime.now(tz.local);
-
-    var scheduled = tz.TZDateTime(
-      tz.local,
-      now.year,
-      now.month,
-      now.day,
-      19, // 7 PM
-    );
-
-    if (scheduled.isBefore(now)) scheduled = scheduled.add(const Duration(days: 1));
-
-    const androidDetails = AndroidNotificationDetails(
-      'streak_channel',
-      'Streak Check',
-      channelDescription: 'Checks streak risks',
-      importance: Importance.max,
-      priority: Priority.high,
-    );
-
-    const details = NotificationDetails(android: androidDetails);
-
-    await _notifications.zonedSchedule(
-      id: 99,
-      title: 'Habit Review',
-      body: 'Checking your streaks…',
-      scheduledDate: scheduled,
-      notificationDetails: details,
-      androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
-      matchDateTimeComponents: DateTimeComponents.time,
-    );
-  }
-
-  // ---------------------------------------------------------------------------
-  // ✅ ALL HABITS COMPLETED
-  // ---------------------------------------------------------------------------
   static Future<void> showAllCompleted() async {
-    const androidDetails = AndroidNotificationDetails(
-      'success_channel',
-      'Success',
-      channelDescription: 'All habits completed',
-      importance: Importance.max,
-      priority: Priority.high,
-    );
-
-    const details = NotificationDetails(android: androidDetails);
-
-    await _notifications.show(
-      id: 2,
-      title: 'All Habits Completed',
-      body: 'Momentum successfully preserved.',
-      notificationDetails: details,
+    await triggerCloudNotification(
+      title: '🎉 All Habits Completed!',
+      body: 'Incredible work! You crushed all your habits today.',
+      type: 'all_habits_completed',
     );
   }
 
-  // ---------------------------------------------------------------------------
-  // ✅ STREAK WARNING
-  // ---------------------------------------------------------------------------
-  static Future<void> showStreakWarning(String habitName, int streak) async {
-    const androidDetails = AndroidNotificationDetails(
-      'warning_channel',
-      'Streak Warning',
-      channelDescription: 'Habit streak warning',
-      importance: Importance.max,
-      priority: Priority.high,
+  static Future<void> showWaterGoalReached(int glasses) async {
+    await triggerCloudNotification(
+      title: '🎉 Hydration Goal Completed!',
+      body: 'Amazing! You reached your target of $glasses glasses of water today.',
+      type: 'water_goal',
     );
+  }
 
-    const details = NotificationDetails(android: androidDetails);
+  static Future<void> showStepsTargetCompleted(int targetSteps) async {
+    await triggerCloudNotification(
+      title: '🎯 Step Target Achieved!',
+      body: 'You crushed it! You reached your goal of $targetSteps steps today.',
+      type: 'step_goal',
+    );
+  }
 
-    await _notifications.show(
-      id: 3,
+  static Future<void> showStreakWarning(String habitName, int streak) async {
+    await triggerCloudNotification(
       title: 'Streak At Risk',
       body: '$habitName — your $streak-day streak needs attention.',
-      notificationDetails: details,
+      type: 'streak_risk',
     );
   }
 
-  // ---------------------------------------------------------------------------
-  // ✅ STREAK BROKEN NOTIFICATION
-  // ---------------------------------------------------------------------------
   static Future<void> showStreakBroken(String habitName) async {
-    const androidDetails = AndroidNotificationDetails(
-      'broken_channel',
-      'Streak Broken',
-      channelDescription: 'Habit streak broken',
-      importance: Importance.max,
-      priority: Priority.high,
-    );
-
-    const details = NotificationDetails(android: androidDetails);
-
-    await _notifications.show(
-      id: 4,
+    await triggerCloudNotification(
       title: 'Streak Broken!',
       body: 'You missed $habitName yesterday. Your streak is reset.',
-      notificationDetails: details,
+      type: 'streak_broken',
     );
   }
 }

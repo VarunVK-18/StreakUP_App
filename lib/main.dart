@@ -1,12 +1,22 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'firebase_options.dart';
 
 import 'screens/theme_provider.dart';
 import 'screens/bottom_navigation_screen.dart';
+import 'screens/auth_screen.dart';
 import 'services/notification_service.dart';
+import 'services/auth_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Initialize Firebase
+  await Firebase.initializeApp(
+    options: DefaultFirebaseOptions.currentPlatform,
+  );
+
   await NotificationService.init();
 
   runApp(const StreakUpApp());
@@ -47,7 +57,20 @@ class MyApp extends StatelessWidget {
           brightness: Brightness.dark,
         ),
       ),
-      home: const BottomNav(),
+      home: StreamBuilder(
+        stream: AuthService().authStateChanges,
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Scaffold(
+              body: Center(child: CircularProgressIndicator()),
+            );
+          }
+          if (snapshot.hasData && snapshot.data != null) {
+            return const BottomNav();
+          }
+          return const AuthScreen();
+        },
+      ),
     );
   }
 }

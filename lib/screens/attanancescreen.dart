@@ -1,7 +1,6 @@
-import 'dart:convert';
 import 'dart:math';
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:streakup/services/database_service.dart';
 
 class AttendanceScreen extends StatefulWidget {
   const AttendanceScreen({super.key});
@@ -11,6 +10,7 @@ class AttendanceScreen extends StatefulWidget {
 }
 
 class _AttendanceScreenState extends State<AttendanceScreen> {
+  final DatabaseService _dbService = DatabaseService();
   List<Map<String, dynamic>> subjects = [];
 
   @override
@@ -20,17 +20,12 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
   }
 
   Future<void> _loadSubjects() async {
-    final prefs = await SharedPreferences.getInstance();
-    final data = prefs.getString('subjects');
-    if (data != null) {
-      subjects = List<Map<String, dynamic>>.from(json.decode(data));
-    }
-    setState(() {});
+    subjects = await _dbService.loadSubjects();
+    if (mounted) setState(() {});
   }
 
   Future<void> _saveSubjects() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('subjects', json.encode(subjects));
+    await _dbService.saveSubjects(subjects);
   }
 
   void _addSubject(String name) {

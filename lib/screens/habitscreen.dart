@@ -1,7 +1,7 @@
-import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import 'package:streakup/services/notification_service.dart';
+import 'package:streakup/services/database_service.dart';
 
 class HabitScreen extends StatefulWidget {
   const HabitScreen({super.key});
@@ -11,6 +11,7 @@ class HabitScreen extends StatefulWidget {
 }
 
 class _HabitScreenState extends State<HabitScreen> {
+  final DatabaseService _dbService = DatabaseService();
   List<Map<String, dynamic>> habits = [];
 
   String get today =>
@@ -28,12 +29,7 @@ class _HabitScreenState extends State<HabitScreen> {
   }
 
   Future<void> _loadHabits() async {
-    final prefs = await SharedPreferences.getInstance();
-    final data = prefs.getString('habits');
-
-    habits = data == null
-        ? []
-        : List<Map<String, dynamic>>.from(json.decode(data));
+    habits = await _dbService.loadHabits();
 
     // Reset doneToday for new day
     for (final h in habits) {
@@ -53,8 +49,7 @@ class _HabitScreenState extends State<HabitScreen> {
   }
 
   Future<void> _saveHabits() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('habits', json.encode(habits));
+    await _dbService.saveHabits(habits);
   }
 
   /// Strict streak: reset streaks for missed days
@@ -302,8 +297,17 @@ class _HabitScreenState extends State<HabitScreen> {
                   h['name'] ?? '',
                   style: const TextStyle(fontWeight: FontWeight.bold),
                 ),
-                subtitle: Text(
-                  "🔥 Streak: $streak ${_rewardLabel(streak)}",
+                subtitle: Row(
+                  children: [
+                    SvgPicture.asset(
+                      'assets/icons/fire_icon.svg',
+                      width: 14,
+                      height: 14,
+                      colorFilter: const ColorFilter.mode(Colors.orange, BlendMode.srcIn),
+                    ),
+                    const SizedBox(width: 4),
+                    Text("Streak: $streak ${_rewardLabel(streak)}"),
+                  ],
                 ),
 
                 trailing: PopupMenuButton<String>(

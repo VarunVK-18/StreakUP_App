@@ -21,6 +21,12 @@ dependencies:
   flutter_local_notifications: ^20.1.0
   timezone: ^0.10.1
   permission_handler: ^12.0.1
+  firebase_core: ^5.1.0
+  cloud_firestore: ^7.1.0
+  firebase_messaging: ^17.0.1
+  firebase_auth: ^7.0.1
+  pedometer: ^4.0.1
+  flutter_svg: ^2.0.17
 
 dev_dependencies:
   flutter_test:
@@ -36,3 +42,6 @@ flutter_launcher_icons:
 
 flutter:
   uses-material-design: true
+  assets:
+    - assets/applogo/
+    - assets/icons/
