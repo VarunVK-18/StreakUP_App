@@ -46,7 +46,9 @@ class _BottomNavState extends State<BottomNav> {
       ),
       bottomNavigationBar: SafeArea(
         top: false,
-        child: Container(
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeInOut,
           height: 68,
           margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),

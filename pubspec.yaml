@@ -25,8 +25,13 @@ dependencies:
   cloud_firestore: ^7.1.0
   firebase_messaging: ^17.0.1
   firebase_auth: ^7.0.1
+  image_picker: ^1.1.2
   pedometer: ^4.0.1
   flutter_svg: ^2.0.17
+  health: ^13.1.2
+  http: ^1.6.0
+  url_launcher: ^6.3.3
+  dropdown_button2: ^4.0.0
 
 dev_dependencies:
   flutter_test:

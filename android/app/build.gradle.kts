@@ -26,7 +26,7 @@ android {
 
     defaultConfig {
         applicationId = "com.example.streakup"
-        minSdk = flutter.minSdkVersion
+        minSdk = 26 // Required for Health Connect / Health API
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName

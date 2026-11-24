@@ -1,8 +1,10 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
+import 'package:health/health.dart';
 import 'package:pedometer/pedometer.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'notification_service.dart';
 import 'database_service.dart';
 
@@ -14,7 +16,9 @@ class StepService {
   StreamSubscription<StepCount>? _stepCountStream;
   final ValueNotifier<int> todaySteps = ValueNotifier<int>(0);
   final ValueNotifier<int> targetSteps = ValueNotifier<int>(6000);
+  final ValueNotifier<bool> isHealthConnected = ValueNotifier<bool>(false);
 
+  final Health _health = Health();
   bool _goalNotificationSent = false;
   int _bootStepOffset = 0;
   String _todayDate = '';
@@ -31,10 +35,97 @@ class StepService {
     todaySteps.value = savedTodaySteps;
     _bootStepOffset = prefs.getInt('steps_boot_offset_$_todayDate') ?? 0;
 
-    // Request Activity Recognition Permission (Android 10+)
+    // 1. Try connecting to Google Health Connect / Google Fit
+    await syncWithGoogleFit();
+
+    // 2. Also initialize local pedometer as seamless real-time fallback
     await _initPedometer();
   }
 
+  // ---------------------------------------------------------------------------
+  // 🩺 GOOGLE HEALTH CONNECT / GOOGLE FIT SYNC
+  // ---------------------------------------------------------------------------
+  Future<String> syncWithGoogleFit() async {
+    final types = [HealthDataType.STEPS];
+
+    try {
+      await _health.configure();
+
+      // Check if Health Connect is available or needs installation
+      final status = await _health.getHealthConnectSdkStatus();
+      if (status == HealthConnectSdkStatus.sdkUnavailableProviderUpdateRequired ||
+          status == HealthConnectSdkStatus.sdkUnavailable) {
+        await openHealthConnectPlayStore();
+        return "NEEDS_PLAYSTORE";
+      }
+
+      if (status != HealthConnectSdkStatus.sdkAvailable) {
+        return "Health Connect is not supported on this device";
+      }
+
+      // Check existing permission
+      bool? hasPermissions = await _health.hasPermissions(types);
+      if (hasPermissions != true) {
+        // Explicitly open the Health Connect permissions dialog
+        final authorized = await _health.requestAuthorization(types);
+        if (!authorized) {
+          // Check once more after dialog dismissed
+          final hasPermAfter = await _health.hasPermissions(types);
+          if (hasPermAfter != true) {
+            return "NEEDS_SETTINGS";
+          }
+        }
+      }
+
+      // If authorized, read steps
+      isHealthConnected.value = true;
+      final now = DateTime.now();
+      final midnight = DateTime(now.year, now.month, now.day);
+
+      final steps = await _health.getTotalStepsInInterval(midnight, now);
+      if (steps != null && steps > 0) {
+        todaySteps.value = steps;
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setInt('steps_count_$_todayDate', steps);
+        _checkGoal(steps);
+        return "SUCCESS:$steps";
+      } else {
+        return "SUCCESS:0";
+      }
+    } catch (e) {
+      debugPrint('Google Fit / Health Connect error: $e');
+      return "Error: $e";
+    }
+  }
+
+  // Open Health Connect Play Store page
+  Future<void> openHealthConnectPlayStore() async {
+    final Uri playStoreUri = Uri.parse(
+      'market://details?id=com.google.android.apps.healthdata',
+    );
+    final Uri webUri = Uri.parse(
+      'https://play.google.com/store/apps/details?id=com.google.android.apps.healthdata',
+    );
+
+    try {
+      if (await canLaunchUrl(playStoreUri)) {
+        await launchUrl(playStoreUri, mode: LaunchMode.externalApplication);
+      } else {
+        await launchUrl(webUri, mode: LaunchMode.externalApplication);
+      }
+    } catch (e) {
+      debugPrint("Could not open Play Store: $e");
+    }
+  }
+
+  // Open Health Connect / App Permissions settings directly
+  Future<void> openHealthConnectSettings() async {
+    await openAppSettings();
+  }
+
+  // ---------------------------------------------------------------------------
+  // 🚶‍♂️ REAL-TIME HARDWARE SENSOR
+  // ---------------------------------------------------------------------------
   Future<void> _initPedometer() async {
     try {
       final status = await Permission.activityRecognition.request();
@@ -73,12 +164,18 @@ class StepService {
     int calculatedToday = event.steps - _bootStepOffset;
     if (calculatedToday < 0) calculatedToday = 0;
 
-    todaySteps.value = calculatedToday;
-    await prefs.setInt('steps_count_$_todayDate', calculatedToday);
+    // Only overwrite if hardware steps exceed currently recorded
+    if (calculatedToday > todaySteps.value) {
+      todaySteps.value = calculatedToday;
+      await prefs.setInt('steps_count_$_todayDate', calculatedToday);
+      _checkGoal(calculatedToday);
+    }
+  }
 
-    // Check step target completion
-    if (calculatedToday >= targetSteps.value && !_goalNotificationSent) {
+  void _checkGoal(int current) async {
+    if (current >= targetSteps.value && !_goalNotificationSent) {
       _goalNotificationSent = true;
+      final prefs = await SharedPreferences.getInstance();
       await prefs.setBool('steps_goal_notified_$_todayDate', true);
       NotificationService.showStepsTargetCompleted(targetSteps.value);
     }
@@ -104,11 +201,7 @@ class StepService {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt('steps_count_$_todayDate', todaySteps.value);
 
-    if (todaySteps.value >= targetSteps.value && !_goalNotificationSent) {
-      _goalNotificationSent = true;
-      await prefs.setBool('steps_goal_notified_$_todayDate', true);
-      NotificationService.showStepsTargetCompleted(targetSteps.value);
-    }
+    _checkGoal(todaySteps.value);
 
     // Sync to Cloud
     final health = await DatabaseService().loadDailyHealth();
@@ -124,4 +217,3 @@ class StepService {
     _stepCountStream?.cancel();
   }
 }
-

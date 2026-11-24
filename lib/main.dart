@@ -8,6 +8,7 @@ import 'screens/bottom_navigation_screen.dart';
 import 'screens/auth_screen.dart';
 import 'services/notification_service.dart';
 import 'services/auth_service.dart';
+import 'widgets/circular_reveal_transition.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -44,19 +45,38 @@ class MyApp extends StatelessWidget {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       title: 'StreakUp',
+      themeAnimationDuration: Duration.zero,
       themeMode:
       themeProvider.isDark ? ThemeMode.dark : ThemeMode.light,
       theme: ThemeData(
         useMaterial3: true,
+        scaffoldBackgroundColor: const Color(0xFFF8F9FA),
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.indigo),
+        appBarTheme: const AppBarTheme(
+          backgroundColor: Color(0xFFF8F9FA),
+          elevation: 0,
+        ),
       ),
       darkTheme: ThemeData(
         useMaterial3: true,
+        scaffoldBackgroundColor: const Color(0xFF121212),
         colorScheme: ColorScheme.fromSeed(
           seedColor: Colors.indigo,
           brightness: Brightness.dark,
         ),
+        appBarTheme: const AppBarTheme(
+          backgroundColor: Color(0xFF121212),
+          elevation: 0,
+        ),
       ),
+      builder: (context, child) {
+        return Material(
+          type: MaterialType.transparency,
+          child: CircularThemeReveal(
+            child: child ?? const SizedBox.shrink(),
+          ),
+        );
+      },
       home: StreamBuilder(
         stream: AuthService().authStateChanges,
         builder: (context, snapshot) {

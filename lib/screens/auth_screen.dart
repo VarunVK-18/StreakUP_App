@@ -120,7 +120,9 @@ class _AuthScreenState extends State<AuthScreen> {
         return;
       }
       if (!_nameRegex.hasMatch(firstName)) {
-        _showError('First name should only contain letters and be at least 2 characters');
+        _showError(
+          'First name should only contain letters and be at least 2 characters',
+        );
         return;
       }
 
@@ -213,14 +215,18 @@ class _AuthScreenState extends State<AuthScreen> {
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Text('Enter your registered email address to receive a password reset link:'),
+              const Text(
+                'Enter your registered email address to receive a password reset link:',
+              ),
               const SizedBox(height: 12),
               TextField(
                 controller: resetCtrl,
                 keyboardType: TextInputType.emailAddress,
                 decoration: InputDecoration(
                   hintText: 'Enter Email Address',
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
                 ),
               ),
             ],
@@ -262,7 +268,9 @@ class _AuthScreenState extends State<AuthScreen> {
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
     return Scaffold(
-      backgroundColor: isDark ? const Color(0xFF121212) : const Color(0xFFF9F7F2),
+      backgroundColor: isDark
+          ? const Color(0xFF121212)
+          : const Color(0xFFF9F7F2),
       body: SafeArea(
         child: SingleChildScrollView(
           padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 16.0),
@@ -291,7 +299,7 @@ class _AuthScreenState extends State<AuthScreen> {
                   shape: BoxShape.circle,
                   boxShadow: [
                     BoxShadow(
-                      color: Colors.black.withOpacity(0.06),
+                      color: Colors.black.withValues(alpha: 0.06),
                       blurRadius: 16,
                       offset: const Offset(0, 4),
                     ),
@@ -304,7 +312,7 @@ class _AuthScreenState extends State<AuthScreen> {
                       'assets/applogo/applogo.png',
                       width: 44,
                       height: 44,
-                      errorBuilder: (_, __, ___) => const Icon(
+                      errorBuilder: (_, _, _) => const Icon(
                         Icons.track_changes_rounded,
                         color: Colors.black,
                         size: 32,
@@ -353,7 +361,7 @@ class _AuthScreenState extends State<AuthScreen> {
                   borderRadius: BorderRadius.circular(28),
                   boxShadow: [
                     BoxShadow(
-                      color: Colors.black.withOpacity(0.04),
+                      color: Colors.black.withValues(alpha: 0.04),
                       blurRadius: 20,
                       offset: const Offset(0, 8),
                     ),
@@ -367,7 +375,9 @@ class _AuthScreenState extends State<AuthScreen> {
                       height: 48,
                       padding: const EdgeInsets.all(4),
                       decoration: BoxDecoration(
-                        color: isDark ? const Color(0xFF2C2C2C) : const Color(0xFFF1F1F5),
+                        color: isDark
+                            ? const Color(0xFF2C2C2C)
+                            : const Color(0xFFF1F1F5),
                         borderRadius: BorderRadius.circular(24),
                       ),
                       child: Row(
@@ -378,15 +388,19 @@ class _AuthScreenState extends State<AuthScreen> {
                               child: Container(
                                 decoration: BoxDecoration(
                                   color: _isSignIn
-                                      ? (isDark ? const Color(0xFF3D3D3D) : Colors.white)
+                                      ? (isDark
+                                            ? const Color(0xFF3D3D3D)
+                                            : Colors.white)
                                       : Colors.transparent,
                                   borderRadius: BorderRadius.circular(20),
                                   boxShadow: _isSignIn
                                       ? [
                                           BoxShadow(
-                                            color: Colors.black.withOpacity(0.06),
+                                            color: Colors.black.withValues(
+                                              alpha: 0.06,
+                                            ),
                                             blurRadius: 8,
-                                          )
+                                          ),
                                         ]
                                       : null,
                                 ),
@@ -394,7 +408,9 @@ class _AuthScreenState extends State<AuthScreen> {
                                 child: Text(
                                   'Sign in',
                                   style: TextStyle(
-                                    fontWeight: _isSignIn ? FontWeight.w600 : FontWeight.w500,
+                                    fontWeight: _isSignIn
+                                        ? FontWeight.w600
+                                        : FontWeight.w500,
                                     color: _isSignIn
                                         ? (isDark ? Colors.white : Colors.black)
                                         : Colors.grey,
@@ -409,15 +425,19 @@ class _AuthScreenState extends State<AuthScreen> {
                               child: Container(
                                 decoration: BoxDecoration(
                                   color: !_isSignIn
-                                      ? (isDark ? const Color(0xFF3D3D3D) : Colors.white)
+                                      ? (isDark
+                                            ? const Color(0xFF3D3D3D)
+                                            : Colors.white)
                                       : Colors.transparent,
                                   borderRadius: BorderRadius.circular(20),
                                   boxShadow: !_isSignIn
                                       ? [
                                           BoxShadow(
-                                            color: Colors.black.withOpacity(0.06),
+                                            color: Colors.black.withValues(
+                                              alpha: 0.06,
+                                            ),
                                             blurRadius: 8,
-                                          )
+                                          ),
                                         ]
                                       : null,
                                 ),
@@ -425,7 +445,9 @@ class _AuthScreenState extends State<AuthScreen> {
                                 child: Text(
                                   'Sign up',
                                   style: TextStyle(
-                                    fontWeight: !_isSignIn ? FontWeight.w600 : FontWeight.w500,
+                                    fontWeight: !_isSignIn
+                                        ? FontWeight.w600
+                                        : FontWeight.w500,
                                     color: !_isSignIn
                                         ? (isDark ? Colors.white : Colors.black)
                                         : Colors.grey,
@@ -450,7 +472,10 @@ class _AuthScreenState extends State<AuthScreen> {
                               children: [
                                 const Text(
                                   'First name',
-                                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w500,
+                                  ),
                                 ),
                                 const SizedBox(height: 8),
                                 _buildTextField(
@@ -468,7 +493,10 @@ class _AuthScreenState extends State<AuthScreen> {
                               children: [
                                 const Text(
                                   'Last name',
-                                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w500,
+                                  ),
                                 ),
                                 const SizedBox(height: 8),
                                 _buildTextField(
@@ -487,7 +515,10 @@ class _AuthScreenState extends State<AuthScreen> {
                     // Email Field
                     const Text(
                       'Email',
-                      style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w500,
+                      ),
                     ),
                     const SizedBox(height: 8),
                     _buildTextField(
@@ -503,7 +534,10 @@ class _AuthScreenState extends State<AuthScreen> {
                     // Password Field
                     const Text(
                       'Password',
-                      style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w500,
+                      ),
                     ),
                     const SizedBox(height: 8),
                     _buildTextField(
@@ -514,11 +548,15 @@ class _AuthScreenState extends State<AuthScreen> {
                       isDark: isDark,
                       suffixIcon: IconButton(
                         icon: Icon(
-                          _obscurePassword ? Icons.visibility_off_outlined : Icons.visibility_outlined,
+                          _obscurePassword
+                              ? Icons.visibility_off_outlined
+                              : Icons.visibility_outlined,
                           size: 20,
                           color: Colors.grey,
                         ),
-                        onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
+                        onPressed: () => setState(
+                          () => _obscurePassword = !_obscurePassword,
+                        ),
                       ),
                     ),
 
@@ -527,7 +565,10 @@ class _AuthScreenState extends State<AuthScreen> {
                       const SizedBox(height: 16),
                       const Text(
                         'Confirm password',
-                        style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w500,
+                        ),
                       ),
                       const SizedBox(height: 8),
                       _buildTextField(
@@ -538,11 +579,16 @@ class _AuthScreenState extends State<AuthScreen> {
                         isDark: isDark,
                         suffixIcon: IconButton(
                           icon: Icon(
-                            _obscureConfirmPassword ? Icons.visibility_off_outlined : Icons.visibility_outlined,
+                            _obscureConfirmPassword
+                                ? Icons.visibility_off_outlined
+                                : Icons.visibility_outlined,
                             size: 20,
                             color: Colors.grey,
                           ),
-                          onPressed: () => setState(() => _obscureConfirmPassword = !_obscureConfirmPassword),
+                          onPressed: () => setState(
+                            () => _obscureConfirmPassword =
+                                !_obscureConfirmPassword,
+                          ),
                         ),
                       ),
                     ],
@@ -572,7 +618,10 @@ class _AuthScreenState extends State<AuthScreen> {
                               const SizedBox(width: 8),
                               const Text(
                                 'Remember Me',
-                                style: TextStyle(fontSize: 13, color: Colors.grey),
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  color: Colors.grey,
+                                ),
                               ),
                             ],
                           ),
@@ -636,7 +685,9 @@ class _AuthScreenState extends State<AuthScreen> {
                           text: TextSpan(
                             style: TextStyle(
                               fontSize: 13,
-                              color: isDark ? Colors.grey[400] : Colors.grey[600],
+                              color: isDark
+                                  ? Colors.grey[400]
+                                  : Colors.grey[600],
                             ),
                             children: [
                               TextSpan(
@@ -688,13 +739,17 @@ class _AuthScreenState extends State<AuthScreen> {
         decoration: InputDecoration(
           hintText: hintText,
           hintStyle: const TextStyle(color: Colors.grey, fontSize: 13),
-          prefixIcon: prefixIcon != null ? Icon(prefixIcon, color: Colors.grey, size: 18) : null,
+          prefixIcon: prefixIcon != null
+              ? Icon(prefixIcon, color: Colors.grey, size: 18)
+              : null,
           suffixIcon: suffixIcon,
           border: InputBorder.none,
-          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 16,
+            vertical: 14,
+          ),
         ),
       ),
     );
   }
 }
-

@@ -1,18 +1,23 @@
+import 'dart:async';
 import 'dart:ui';
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
 import 'package:flutter_svg/flutter_svg.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 
 import 'habitscreen.dart';
 import 'attanancescreen.dart';
 import 'statsscreen.dart';
+import 'profile_screen.dart';
 import 'theme_provider.dart';
 import 'auth_screen.dart';
 import '../services/database_service.dart';
 import '../services/auth_service.dart';
 import '../services/step_service.dart';
 import '../services/notification_service.dart';
+import '../widgets/circular_reveal_transition.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -22,10 +27,13 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
+  final GlobalKey _themeToggleKey = GlobalKey();
   int totalHabits = 0;
   int completedHabits = 0;
   double attendancePercent = 0;
-  String _userName = '';
+  static String _userName = '';
+  static String? _userPhotoUrl;
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _userSub;
 
   // Water & Health State
   int _waterGlasses = 0;
@@ -33,7 +41,9 @@ class _HomeScreenState extends State<HomeScreen> {
   final StepService _stepService = StepService();
 
   // PageView controller for swipeable Focus Cards
-  final PageController _focusPageController = PageController(viewportFraction: 0.88);
+  final PageController _focusPageController = PageController(
+    viewportFraction: 0.88,
+  );
   int _focusPageIndex = 0;
 
   final List<String> _dailyQuotes = [
@@ -43,7 +53,7 @@ class _HomeScreenState extends State<HomeScreen> {
     "⚡ Keep going! You're building consistency.",
     "🌟 Small steps lead to big achievements!",
     "🏆 Consistency is the key to success!",
-    "🌈 Every day is a new opportunity!"
+    "🌈 Every day is a new opportunity!",
   ];
 
   String getDailyQuote() {
@@ -59,8 +69,48 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
+    // Pre-populate name immediately synchronously on state creation
+    final user = AuthService().currentUser;
+    if (user != null && _userName.isEmpty) {
+      if (user.displayName != null && user.displayName!.trim().isNotEmpty) {
+        _userName = user.displayName!.trim();
+      } else if (user.email != null) {
+        _userName = user.email!.split('@').first;
+      }
+    }
     _loadData();
+    _listenToUserProfile();
     _initHealthServices();
+  }
+
+  void _listenToUserProfile() {
+    final user = AuthService().currentUser;
+    if (user == null) return;
+
+    _userSub = FirebaseFirestore.instance
+        .collection('users')
+        .doc(user.uid)
+        .snapshots()
+        .listen((doc) {
+      if (!doc.exists || doc.data() == null) return;
+      final data = doc.data()!;
+      final cloudAvatar = data['avatarBase64'] as String?;
+      final customName = (data['displayName'] ?? '').toString().trim();
+
+      bool changed = false;
+      if (cloudAvatar != null && cloudAvatar.isNotEmpty && cloudAvatar != _userPhotoUrl) {
+        _userPhotoUrl = cloudAvatar;
+        changed = true;
+      }
+      if (customName.isNotEmpty && customName != _userName) {
+        _userName = customName;
+        changed = true;
+      }
+
+      if (changed && mounted) {
+        setState(() {});
+      }
+    });
   }
 
   Future<void> _initHealthServices() async {
@@ -81,8 +131,7 @@ class _HomeScreenState extends State<HomeScreen> {
     final health = await dbService.loadDailyHealth();
 
     totalHabits = habits.length;
-    completedHabits =
-        habits.where((h) => h['doneToday'] == true).length;
+    completedHabits = habits.where((h) => h['doneToday'] == true).length;
 
     double present = 0;
     int total = 0;
@@ -92,20 +141,48 @@ class _HomeScreenState extends State<HomeScreen> {
       total += (s['total'] ?? 0) as int;
     }
 
-    attendancePercent =
-    total == 0 ? 0 : (present / total) * 100;
+    attendancePercent = total == 0 ? 0 : (present / total) * 100;
 
     _waterGlasses = health['waterGlasses'] ?? 0;
     _waterTarget = health['waterTarget'] ?? 8;
 
-    // Load User Name
+    // Load User Name & Photo immediately from cache/auth
     final currentUser = AuthService().currentUser;
     if (currentUser != null) {
-      if (currentUser.displayName != null && currentUser.displayName!.trim().isNotEmpty) {
+      if (_userName.isEmpty) {
+        if (currentUser.displayName != null &&
+            currentUser.displayName!.trim().isNotEmpty) {
+          _userName = currentUser.displayName!.trim();
+        } else if (currentUser.email != null) {
+          _userName = currentUser.email!.split('@').first;
+        }
+      }
+
+      // Always fetch latest name & avatar from Firestore to reflect edits immediately
+      if (currentUser.displayName != null &&
+          currentUser.displayName!.trim().isNotEmpty) {
         _userName = currentUser.displayName!.trim();
-      } else if (currentUser.email != null) {
+      } else if (_userName.isEmpty && currentUser.email != null) {
         _userName = currentUser.email!.split('@').first;
       }
+
+      try {
+        final doc = await FirebaseFirestore.instance
+            .collection('users')
+            .doc(currentUser.uid)
+            .get();
+        if (doc.exists && doc.data() != null) {
+          final data = doc.data()!;
+          final cloudAvatar = data['avatarBase64'] as String?;
+          if (cloudAvatar != null && cloudAvatar.isNotEmpty) {
+            _userPhotoUrl = cloudAvatar;
+          }
+          final customName = (data['displayName'] ?? '').toString().trim();
+          if (customName.isNotEmpty) {
+            _userName = customName;
+          }
+        }
+      } catch (_) {}
     }
 
     if (mounted) setState(() {});
@@ -153,7 +230,9 @@ class _HomeScreenState extends State<HomeScreen> {
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Text('How many glasses (approx 250ml) do you want to drink per day?'),
+            const Text(
+              'How many glasses (approx 250ml) do you want to drink per day?',
+            ),
             const SizedBox(height: 16),
             StatefulBuilder(
               builder: (ctx, setLocal) => Row(
@@ -167,7 +246,10 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                   Text(
                     '$tempTarget glasses',
-                    style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                    style: const TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                    ),
                   ),
                   IconButton(
                     icon: const Icon(Icons.add_circle_outline),
@@ -225,7 +307,9 @@ class _HomeScreenState extends State<HomeScreen> {
               decoration: InputDecoration(
                 hintText: 'e.g. 6000',
                 suffixText: 'steps',
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
               ),
             ),
           ],
@@ -256,6 +340,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   void dispose() {
+    _userSub?.cancel();
     _focusPageController.dispose();
     super.dispose();
   }
@@ -265,11 +350,48 @@ class _HomeScreenState extends State<HomeScreen> {
     final themeProvider = Provider.of<ThemeProvider>(context);
     final isDark = themeProvider.isDark;
 
-    final formattedDate =
-    DateFormat('EEEE, MMM d, y').format(DateTime.now());
+    final formattedDate = DateFormat('EEEE, MMM d, y').format(DateTime.now());
 
     return Scaffold(
       appBar: AppBar(
+        leadingWidth: 64,
+        leading: Padding(
+          padding: const EdgeInsets.only(left: 18),
+          child: Center(
+            child: GestureDetector(
+              onTap: () async {
+                final result = await Navigator.push<bool>(
+                  context,
+                  MaterialPageRoute(builder: (_) => const ProfileScreen()),
+                );
+                if (result == true || mounted) {
+                  _loadData();
+                }
+              },
+              child: CircleAvatar(
+                radius: 20,
+                backgroundColor: isDark
+                    ? const Color(0xFF2C2C2C)
+                    : const Color(0xFFE2E8F0),
+                backgroundImage: _userPhotoUrl != null
+                    ? (_userPhotoUrl!.startsWith('http')
+                          ? NetworkImage(_userPhotoUrl!)
+                          : MemoryImage(base64Decode(_userPhotoUrl!))
+                                as ImageProvider)
+                    : null,
+                child: _userPhotoUrl == null
+                    ? Text(
+                        _userName.isNotEmpty ? _userName[0].toUpperCase() : "U",
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          color: isDark ? Colors.white : Colors.black87,
+                        ),
+                      )
+                    : null,
+              ),
+            ),
+          ),
+        ),
         title: const Text(
           "StreakUp",
           style: TextStyle(fontWeight: FontWeight.bold),
@@ -277,8 +399,34 @@ class _HomeScreenState extends State<HomeScreen> {
         centerTitle: true,
         actions: [
           IconButton(
-            icon: Icon(isDark ? Icons.light_mode : Icons.dark_mode),
-            onPressed: themeProvider.toggleTheme,
+            key: _themeToggleKey,
+            icon: AnimatedSwitcher(
+              duration: const Duration(milliseconds: 400),
+              switchInCurve: Curves.easeOutBack,
+              switchOutCurve: Curves.easeIn,
+              transitionBuilder: (child, anim) => RotationTransition(
+                turns: Tween<double>(begin: 0.75, end: 1.0).animate(anim),
+                child: ScaleTransition(
+                  scale: anim,
+                  child: child,
+                ),
+              ),
+              child: Icon(
+                isDark ? Icons.light_mode_rounded : Icons.dark_mode_rounded,
+                key: ValueKey<bool>(isDark),
+              ),
+            ),
+            onPressed: () {
+              final reveal = CircularThemeReveal.of(context);
+              if (reveal != null) {
+                reveal.triggerReveal(
+                  iconKey: _themeToggleKey,
+                  onToggle: themeProvider.toggleTheme,
+                );
+              } else {
+                themeProvider.toggleTheme();
+              }
+            },
           ),
           IconButton(
             icon: const Icon(Icons.logout_rounded),
@@ -307,6 +455,8 @@ class _HomeScreenState extends State<HomeScreen> {
               );
 
               if (confirm == true) {
+                _userName = '';
+                _userPhotoUrl = null;
                 await AuthService().signOut();
                 if (context.mounted) {
                   Navigator.of(context).pushAndRemoveUntil(
@@ -320,13 +470,19 @@ class _HomeScreenState extends State<HomeScreen> {
         ],
       ),
       floatingActionButton: FloatingActionButton(
+        heroTag: 'home_fab',
         onPressed: () => _showFabMenu(context),
         child: const Icon(Icons.add),
       ),
       body: RefreshIndicator(
         onRefresh: _loadData,
         child: ListView(
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 24), // ✅ extra bottom space
+          padding: const EdgeInsets.fromLTRB(
+            16,
+            16,
+            16,
+            24,
+          ), // ✅ extra bottom space
           children: [
             Text(
               formattedDate,
@@ -340,7 +496,9 @@ class _HomeScreenState extends State<HomeScreen> {
               children: [
                 Flexible(
                   child: Text(
-                    _userName.isNotEmpty ? "Welcome Back, $_userName" : "Welcome Back",
+                    _userName.isNotEmpty
+                        ? "Welcome Back, $_userName"
+                        : "Welcome Back",
                     style: const TextStyle(
                       fontSize: 18,
                       fontWeight: FontWeight.w600,
@@ -366,10 +524,7 @@ class _HomeScreenState extends State<HomeScreen> {
               children: [
                 const Text(
                   "Today's Focus",
-                  style: TextStyle(
-                    fontSize: 20,
-                    fontWeight: FontWeight.bold,
-                  ),
+                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
                 ),
                 Text(
                   _focusPageIndex == 0 ? "Habits" : "Attendance",
@@ -394,19 +549,31 @@ class _HomeScreenState extends State<HomeScreen> {
                     title: "Streak Momentum",
                     subtitle: "Daily Habits",
                     mainValue: "${totalHabits - completedHabits} Left",
-                    progressPercent: totalHabits == 0 ? 0.0 : (completedHabits / totalHabits),
+                    progressPercent: totalHabits == 0
+                        ? 0.0
+                        : (completedHabits / totalHabits),
                     progressLabel: "$completedHabits of $totalHabits completed",
-                    gradientColors: [const Color(0xFF6366F1), const Color(0xFF4338CA)], // Ambient Indigo Glow
+                    gradientColors: [
+                      const Color(0xFF6366F1),
+                      const Color(0xFF4338CA),
+                    ], // Ambient Indigo Glow
                     iconSvg: 'assets/icons/fire_icon.svg',
-                    badgeText: totalHabits == completedHabits && totalHabits > 0 ? "DONE 🔥" : "ACTIVE",
+                    badgeText: totalHabits == completedHabits && totalHabits > 0
+                        ? "DONE 🔥"
+                        : "ACTIVE",
                   ),
                   _swipeCard(
                     title: "Class Attendance",
                     subtitle: "Academic Streak",
                     mainValue: "${attendancePercent.toStringAsFixed(1)}%",
                     progressPercent: (attendancePercent / 100).clamp(0.0, 1.0),
-                    progressLabel: attendancePercent >= 75 ? "Safe threshold (≥75%)" : "Below 75% goal",
-                    gradientColors: [const Color(0xFF0EA5E9), const Color(0xFF0284C7)], // Ambient Sky Blue Glow
+                    progressLabel: attendancePercent >= 75
+                        ? "Safe threshold (≥75%)"
+                        : "Below 75% goal",
+                    gradientColors: [
+                      const Color(0xFF0EA5E9),
+                      const Color(0xFF0284C7),
+                    ], // Ambient Sky Blue Glow
                     iconData: Icons.school_rounded,
                     badgeText: attendancePercent >= 75 ? "HEALTHY" : "CRITICAL",
                   ),
@@ -418,11 +585,7 @@ class _HomeScreenState extends State<HomeScreen> {
             // Pagination Dots (Matching reference mockup "Physical Card •••")
             Row(
               mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                _buildDot(0),
-                const SizedBox(width: 6),
-                _buildDot(1),
-              ],
+              children: [_buildDot(0), const SizedBox(width: 6), _buildDot(1)],
             ),
 
             const SizedBox(height: 24),
@@ -431,10 +594,7 @@ class _HomeScreenState extends State<HomeScreen> {
               children: [
                 const Text(
                   "Health & Hydration",
-                  style: TextStyle(
-                    fontSize: 20,
-                    fontWeight: FontWeight.bold,
-                  ),
+                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
                 ),
                 TextButton.icon(
                   onPressed: () => _showHealthSettings(context),
@@ -457,10 +617,7 @@ class _HomeScreenState extends State<HomeScreen> {
             const SizedBox(height: 28),
             const Text(
               "Daily Motivation",
-              style: TextStyle(
-                fontSize: 20,
-                fontWeight: FontWeight.bold,
-              ),
+              style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 12),
             _motivationCard(),
@@ -492,9 +649,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(28),
-      ),
+      decoration: BoxDecoration(borderRadius: BorderRadius.circular(28)),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(28),
         child: BackdropFilter(
@@ -539,7 +694,9 @@ class _HomeScreenState extends State<HomeScreen> {
                         Text(
                           title,
                           style: TextStyle(
-                            color: isDark ? Colors.white : const Color(0xFF0F172A),
+                            color: isDark
+                                ? Colors.white
+                                : const Color(0xFF0F172A),
                             fontSize: 15,
                             fontWeight: FontWeight.w600,
                             letterSpacing: -0.2,
@@ -549,7 +706,9 @@ class _HomeScreenState extends State<HomeScreen> {
                         Text(
                           subtitle,
                           style: TextStyle(
-                            color: isDark ? Colors.white60 : const Color(0xFF64748B),
+                            color: isDark
+                                ? Colors.white60
+                                : const Color(0xFF64748B),
                             fontSize: 11,
                             fontWeight: FontWeight.normal,
                           ),
@@ -558,7 +717,10 @@ class _HomeScreenState extends State<HomeScreen> {
                     ),
                     // Glass Pill Badge
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 5,
+                      ),
                       decoration: BoxDecoration(
                         color: isDark
                             ? Colors.white.withValues(alpha: 0.12)
@@ -580,21 +742,27 @@ class _HomeScreenState extends State<HomeScreen> {
                               width: 13,
                               height: 13,
                               colorFilter: ColorFilter.mode(
-                                isDark ? Colors.orangeAccent : const Color(0xFFEA580C),
+                                isDark
+                                    ? Colors.orangeAccent
+                                    : const Color(0xFFEA580C),
                                 BlendMode.srcIn,
                               ),
                             )
                           else if (iconData != null)
                             Icon(
                               iconData,
-                              color: isDark ? Colors.blueAccent : const Color(0xFF2563EB),
+                              color: isDark
+                                  ? Colors.blueAccent
+                                  : const Color(0xFF2563EB),
                               size: 14,
                             ),
                           const SizedBox(width: 5),
                           Text(
                             badgeText,
                             style: TextStyle(
-                              color: isDark ? Colors.white : const Color(0xFF0F172A),
+                              color: isDark
+                                  ? Colors.white
+                                  : const Color(0xFF0F172A),
                               fontSize: 10,
                               fontWeight: FontWeight.bold,
                               letterSpacing: 0.6,
@@ -638,7 +806,9 @@ class _HomeScreenState extends State<HomeScreen> {
                     Text(
                       progressLabel,
                       style: TextStyle(
-                        color: isDark ? Colors.white60 : const Color(0xFF64748B),
+                        color: isDark
+                            ? Colors.white60
+                            : const Color(0xFF64748B),
                         fontSize: 10.5,
                         fontWeight: FontWeight.normal,
                       ),
@@ -677,8 +847,7 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
       child: Row(
         children: [
-          const Icon(Icons.auto_awesome,
-              color: Colors.white, size: 36),
+          const Icon(Icons.auto_awesome, color: Colors.white, size: 36),
           const SizedBox(width: 16),
           Expanded(
             child: Text(
@@ -724,7 +893,9 @@ class _HomeScreenState extends State<HomeScreen> {
   // 💧 WATER TRACKER CARD
   // ---------------------------------------------------------------------------
   Widget _waterTrackerCard(bool isDark) {
-    final double waterPercent = _waterTarget > 0 ? (_waterGlasses / _waterTarget).clamp(0.0, 1.0) : 0.0;
+    final double waterPercent = _waterTarget > 0
+        ? (_waterGlasses / _waterTarget).clamp(0.0, 1.0)
+        : 0.0;
     final bool goalDone = _waterGlasses >= _waterTarget;
 
     return Container(
@@ -753,7 +924,11 @@ class _HomeScreenState extends State<HomeScreen> {
                       color: Colors.blue.withValues(alpha: 0.2),
                       shape: BoxShape.circle,
                     ),
-                    child: const Icon(Icons.water_drop_rounded, color: Colors.blue, size: 24),
+                    child: const Icon(
+                      Icons.water_drop_rounded,
+                      color: Colors.blue,
+                      size: 24,
+                    ),
                   ),
                   const SizedBox(width: 12),
                   Column(
@@ -761,14 +936,21 @@ class _HomeScreenState extends State<HomeScreen> {
                     children: [
                       const Text(
                         "Water Intake",
-                        style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                        ),
                       ),
                       Text(
-                        goalDone ? "Goal Reached! 🎉" : "$_waterGlasses of $_waterTarget glasses",
+                        goalDone
+                            ? "Goal Reached! 🎉"
+                            : "$_waterGlasses of $_waterTarget glasses",
                         style: TextStyle(
                           fontSize: 13,
                           color: goalDone ? Colors.blue : Colors.grey[600],
-                          fontWeight: goalDone ? FontWeight.w600 : FontWeight.normal,
+                          fontWeight: goalDone
+                              ? FontWeight.w600
+                              : FontWeight.normal,
                         ),
                       ),
                     ],
@@ -779,7 +961,10 @@ class _HomeScreenState extends State<HomeScreen> {
                 children: [
                   if (_waterGlasses > 0)
                     IconButton(
-                      icon: const Icon(Icons.remove_circle_outline, color: Colors.grey),
+                      icon: const Icon(
+                        Icons.remove_circle_outline,
+                        color: Colors.grey,
+                      ),
                       tooltip: 'Undo glass',
                       onPressed: _undoWater,
                     ),
@@ -788,12 +973,20 @@ class _HomeScreenState extends State<HomeScreen> {
                       backgroundColor: Colors.blue,
                       foregroundColor: Colors.white,
                       elevation: 0,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 8,
+                      ),
                     ),
                     onPressed: _drinkWater,
                     icon: const Icon(Icons.add, size: 18),
-                    label: const Text("+1 Glass", style: TextStyle(fontWeight: FontWeight.bold)),
+                    label: const Text(
+                      "+1 Glass",
+                      style: TextStyle(fontWeight: FontWeight.bold),
+                    ),
                   ),
                 ],
               ),
@@ -806,7 +999,9 @@ class _HomeScreenState extends State<HomeScreen> {
               value: waterPercent,
               minHeight: 10,
               backgroundColor: Colors.blue.withValues(alpha: 0.15),
-              valueColor: const AlwaysStoppedAnimation<Color>(Colors.blueAccent),
+              valueColor: const AlwaysStoppedAnimation<Color>(
+                Colors.blueAccent,
+              ),
             ),
           ),
         ],
@@ -822,7 +1017,9 @@ class _HomeScreenState extends State<HomeScreen> {
       valueListenable: _stepService.todaySteps,
       builder: (context, steps, _) {
         final target = _stepService.targetSteps.value;
-        final double stepsPercent = target > 0 ? (steps / target).clamp(0.0, 1.0) : 0.0;
+        final double stepsPercent = target > 0
+            ? (steps / target).clamp(0.0, 1.0)
+            : 0.0;
         final bool goalDone = steps >= target;
 
         // Estimated km and calories
@@ -855,7 +1052,11 @@ class _HomeScreenState extends State<HomeScreen> {
                           color: Colors.amber.withValues(alpha: 0.2),
                           shape: BoxShape.circle,
                         ),
-                        child: const Icon(Icons.directions_walk_rounded, color: Colors.amber, size: 24),
+                        child: const Icon(
+                          Icons.directions_walk_rounded,
+                          color: Colors.amber,
+                          size: 24,
+                        ),
                       ),
                       const SizedBox(width: 12),
                       Column(
@@ -863,24 +1064,102 @@ class _HomeScreenState extends State<HomeScreen> {
                         children: [
                           const Text(
                             "Step Counter",
-                            style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                            ),
                           ),
                           Text(
-                            goalDone ? "Target Achieved! 🏆" : "$steps / $target steps",
+                            goalDone
+                                ? "Target Achieved! 🏆"
+                                : "$steps / $target steps",
                             style: TextStyle(
                               fontSize: 13,
-                              color: goalDone ? Colors.amber[800] : Colors.grey[600],
-                              fontWeight: goalDone ? FontWeight.w600 : FontWeight.normal,
+                              color: goalDone
+                                  ? Colors.amber[800]
+                                  : Colors.grey[600],
+                              fontWeight: goalDone
+                                  ? FontWeight.w600
+                                  : FontWeight.normal,
                             ),
                           ),
                         ],
                       ),
                     ],
                   ),
-                  IconButton(
-                    icon: const Icon(Icons.add_circle_outline, color: Colors.amber),
-                    tooltip: 'Add manual steps (+500)',
-                    onPressed: () => _stepService.addManualSteps(500),
+                  Row(
+                    children: [
+                      IconButton(
+                        icon: const Icon(
+                          Icons.sync_rounded,
+                          color: Colors.blueAccent,
+                        ),
+                        tooltip: 'Sync Google Fit / Health Connect',
+                        onPressed: () async {
+                          final result = await _stepService.syncWithGoogleFit();
+                          if (!context.mounted) return;
+
+                          if (result == "NEEDS_SETTINGS") {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: const Text(
+                                  "Permission needed: Tap Settings to turn on Health Connect access.",
+                                ),
+                                backgroundColor: const Color(0xFF0F172A),
+                                duration: const Duration(seconds: 5),
+                                action: SnackBarAction(
+                                  label: "Settings",
+                                  textColor: Colors.blueAccent,
+                                  onPressed: () => _stepService.openHealthConnectSettings(),
+                                ),
+                              ),
+                            );
+                            // Open settings directly for convenience
+                            await _stepService.openHealthConnectSettings();
+                          } else if (result == "NEEDS_PLAYSTORE") {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: const Text(
+                                  "Health Connect is not installed. Opening Google Play Store...",
+                                ),
+                                backgroundColor: Colors.orange[800]!,
+                                duration: const Duration(seconds: 5),
+                                action: SnackBarAction(
+                                  label: "Install",
+                                  textColor: Colors.white,
+                                  onPressed: () => _stepService.openHealthConnectPlayStore(),
+                                ),
+                              ),
+                            );
+                          } else if (result.startsWith("SUCCESS:")) {
+                            final count = result.split(":").last;
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text("Synced $count steps from Health Connect!"),
+                                backgroundColor: Colors.green[700]!,
+                                duration: const Duration(seconds: 3),
+                              ),
+                            );
+                          } else {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text(result),
+                                backgroundColor: Colors.orangeAccent[700]!,
+                                duration: const Duration(seconds: 3),
+                              ),
+                            );
+                          }
+                        },
+                      ),
+                      IconButton(
+                        icon: const Icon(
+                          Icons.add_circle_outline,
+                          color: Colors.amber,
+                        ),
+                        tooltip: 'Add manual steps (+500)',
+                        onPressed: () => _stepService.addManualSteps(500),
+                      ),
+                    ],
                   ),
                 ],
               ),
@@ -908,7 +1187,10 @@ class _HomeScreenState extends State<HomeScreen> {
                         'assets/icons/fire_icon.svg',
                         width: 14,
                         height: 14,
-                        colorFilter: const ColorFilter.mode(Colors.orange, BlendMode.srcIn),
+                        colorFilter: const ColorFilter.mode(
+                          Colors.orange,
+                          BlendMode.srcIn,
+                        ),
                       ),
                       const SizedBox(width: 4),
                       Text(
@@ -955,7 +1237,9 @@ class _HomeScreenState extends State<HomeScreen> {
             ListTile(
               leading: const Icon(Icons.directions_walk, color: Colors.amber),
               title: const Text("Daily Step Target"),
-              subtitle: Text("Current: ${_stepService.targetSteps.value} steps"),
+              subtitle: Text(
+                "Current: ${_stepService.targetSteps.value} steps",
+              ),
               trailing: const Icon(Icons.chevron_right),
               onTap: () {
                 Navigator.pop(context);
@@ -972,8 +1256,7 @@ class _HomeScreenState extends State<HomeScreen> {
     showModalBottomSheet(
       context: context,
       shape: const RoundedRectangleBorder(
-        borderRadius:
-        BorderRadius.vertical(top: Radius.circular(20)),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
       builder: (_) => Padding(
         padding: const EdgeInsets.all(16),
@@ -984,8 +1267,7 @@ class _HomeScreenState extends State<HomeScreen> {
               title: const Text("Add Habit"),
               onTap: () => Navigator.push(
                 context,
-                MaterialPageRoute(
-                    builder: (_) => const HabitScreen()),
+                MaterialPageRoute(builder: (_) => const HabitScreen()),
               ),
             ),
             ListTile(
@@ -993,8 +1275,7 @@ class _HomeScreenState extends State<HomeScreen> {
               title: const Text("View Stats"),
               onTap: () => Navigator.push(
                 context,
-                MaterialPageRoute(
-                    builder: (_) => const StatsScreen()),
+                MaterialPageRoute(builder: (_) => const StatsScreen()),
               ),
             ),
             ListTile(
@@ -1002,9 +1283,7 @@ class _HomeScreenState extends State<HomeScreen> {
               title: const Text("Attendance"),
               onTap: () => Navigator.push(
                 context,
-                MaterialPageRoute(
-                    builder: (_) =>
-                    const AttendanceScreen()),
+                MaterialPageRoute(builder: (_) => const AttendanceScreen()),
               ),
             ),
           ],
